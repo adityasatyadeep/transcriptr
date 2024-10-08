@@ -1,5 +1,7 @@
 import os
 import modal
+from fastapi.responses import StreamingResponse
+import time
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "/model")
 MODEL_NAME = "openai/whisper-large-v3"
@@ -70,7 +72,7 @@ class Model:
             return_timestamps=True,
             device="cuda"
         )
-    @modal.batched(max_batch_size=1, wait_ms=1000)
+    @modal.batched(max_batch_size=10, wait_ms=1000)
     def transcribe(self, audio):
         print("Processing: ", audio)
         import time
@@ -81,19 +83,34 @@ class Model:
         return result
 
 
-@app.function(mounts=[modal.Mount.from_local_dir("./audio_samples", remote_path="/root/audio_samples")])
-@modal.web_endpoint()
+@app.function(gpu="any", mounts=[modal.Mount.from_local_dir("./audio_samples", remote_path="/root/audio_samples")])
 def transcribe_audio():
     whisper = Model()
-    print("📣 Transcribing")
-
     files = os.listdir("/root/audio_samples")
     file_paths = ["/root/audio_samples/" + f for f in files]
 
-    responses = []
+    for file_path in file_paths:
+        text = whisper.transcribe.remote(file_path)
+        yield text['text'].encode()
 
-    for x in whisper.transcribe.map(file_paths):
-        print(x["text"])
-        responses.append(x['text'])
+@app.function()
+@modal.web_endpoint()
+def main():
+    return StreamingResponse(
+        transcribe_audio.remote_gen(), media_type="text/event-stream"
+    )
 
-    return responses
+
+# @app.function(gpu="any")
+# def fake_video_render():
+#     for i in range(10):
+#         yield str(i).encode()
+#         time.sleep(1)
+
+
+# @app.function()
+# @modal.web_endpoint()
+# def hook():
+#     return StreamingResponse(
+#         fake_video_render.remote_gen(), media_type="text/event-stream"
+#     )
